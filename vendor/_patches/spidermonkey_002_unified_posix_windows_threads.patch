@@ -1,0 +1,75 @@
+diff --git a/vendor/spidermonkey/unified/js/src/Unified_cpp_js_src12.cpp b/vendor/spidermonkey/unified/js/src/Unified_cpp_js_src12.cpp
+index 34184af12..218f47ac8 100644
+--- a/vendor/spidermonkey/unified/js/src/Unified_cpp_js_src12.cpp
++++ b/vendor/spidermonkey/unified/js/src/Unified_cpp_js_src12.cpp
+@@ -44,12 +44,24 @@
+ #error "src/js/src/threading/Thread.cpp defines INITGUID, so it cannot be built in unified mode."
+ #undef INITGUID
+ #endif
+-#include "src/js/src/threading/posix/CpuCount.cpp"
+-#ifdef PL_ARENA_CONST_ALIGN_MASK
+-#error "src/js/src/threading/posix/CpuCount.cpp uses PL_ARENA_CONST_ALIGN_MASK, so it cannot be built in unified mode."
+-#undef PL_ARENA_CONST_ALIGN_MASK
+-#endif
+-#ifdef INITGUID
+-#error "src/js/src/threading/posix/CpuCount.cpp defines INITGUID, so it cannot be built in unified mode."
+-#undef INITGUID
++#ifdef _WIN32
++    #include "src/js/src/threading/windows/CpuCount.cpp"
++    #ifdef PL_ARENA_CONST_ALIGN_MASK
++    #error "src/js/src/threading/windows/CpuCount.cpp uses PL_ARENA_CONST_ALIGN_MASK, so it cannot be built in unified mode."
++    #undef PL_ARENA_CONST_ALIGN_MASK
++    #endif
++    #ifdef INITGUID
++    #error "src/js/src/threading/windows/CpuCount.cpp defines INITGUID, so it cannot be built in unified mode."
++    #undef INITGUID
++    #endif
++#else
++    #include "src/js/src/threading/posix/CpuCount.cpp"
++    #ifdef PL_ARENA_CONST_ALIGN_MASK
++    #error "src/js/src/threading/posix/CpuCount.cpp uses PL_ARENA_CONST_ALIGN_MASK, so it cannot be built in unified mode."
++    #undef PL_ARENA_CONST_ALIGN_MASK
++    #endif
++    #ifdef INITGUID
++    #error "src/js/src/threading/posix/CpuCount.cpp defines INITGUID, so it cannot be built in unified mode."
++    #undef INITGUID
++    #endif
+ #endif
+\ No newline at end of file
+diff --git a/vendor/spidermonkey/unified/js/src/Unified_cpp_js_src13.cpp b/vendor/spidermonkey/unified/js/src/Unified_cpp_js_src13.cpp
+index 776f3c569..8e95cd376 100644
+--- a/vendor/spidermonkey/unified/js/src/Unified_cpp_js_src13.cpp
++++ b/vendor/spidermonkey/unified/js/src/Unified_cpp_js_src13.cpp
+@@ -1,12 +1,24 @@
+ #define MOZ_UNIFIED_BUILD
+-#include "src/js/src/threading/posix/PosixThread.cpp"
+-#ifdef PL_ARENA_CONST_ALIGN_MASK
+-#error "src/js/src/threading/posix/PosixThread.cpp uses PL_ARENA_CONST_ALIGN_MASK, so it cannot be built in unified mode."
+-#undef PL_ARENA_CONST_ALIGN_MASK
+-#endif
+-#ifdef INITGUID
+-#error "src/js/src/threading/posix/PosixThread.cpp defines INITGUID, so it cannot be built in unified mode."
+-#undef INITGUID
++#ifdef _WIN32
++    #include "src/js/src/threading/windows/WindowsThread.cpp"
++    #ifdef PL_ARENA_CONST_ALIGN_MASK
++    #error "src/js/src/threading/windows/WindowsThread.cpp uses PL_ARENA_CONST_ALIGN_MASK, so it cannot be built in unified mode."
++    #undef PL_ARENA_CONST_ALIGN_MASK
++    #endif
++    #ifdef INITGUID
++    #error "src/js/src/threading/windows/WindowsThread.cpp defines INITGUID, so it cannot be built in unified mode."
++    #undef INITGUID
++    #endif
++#else
++    #include "src/js/src/threading/posix/PosixThread.cpp"
++    #ifdef PL_ARENA_CONST_ALIGN_MASK
++    #error "src/js/src/threading/posix/PosixThread.cpp uses PL_ARENA_CONST_ALIGN_MASK, so it cannot be built in unified mode."
++    #undef PL_ARENA_CONST_ALIGN_MASK
++    #endif
++    #ifdef INITGUID
++    #error "src/js/src/threading/posix/PosixThread.cpp defines INITGUID, so it cannot be built in unified mode."
++    #undef INITGUID
++    #endif
+ #endif
+ #include "src/js/src/util/AllocPolicy.cpp"
+ #ifdef PL_ARENA_CONST_ALIGN_MASK

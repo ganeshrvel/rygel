@@ -1,0 +1,13 @@
+diff --git a/vendor/spidermonkey/src/js/src/gc/Cell.h b/vendor/spidermonkey/src/js/src/gc/Cell.h
+index 62b8459fb..742fca71f 100644
+--- a/vendor/spidermonkey/src/js/src/gc/Cell.h
++++ b/vendor/spidermonkey/src/js/src/gc/Cell.h
+@@ -223,7 +223,7 @@ struct Cell {
+   uintptr_t address() const;
+   inline TenuredChunk* chunk() const;
+ 
+- private:
++ public:
+   // Cells are destroyed by the GC. Do not delete them directly.
+   void operator delete(void*) = delete;
+ } JS_HAZ_GC_THING;

@@ -1,0 +1,24 @@
+diff --git a/vendor/spidermonkey/src/js/src/vm/Compression.cpp b/vendor/spidermonkey/src/js/src/vm/Compression.cpp
+index 3039cfa36..5f0353bab 100644
+--- a/vendor/spidermonkey/src/js/src/vm/Compression.cpp
++++ b/vendor/spidermonkey/src/js/src/vm/Compression.cpp
+@@ -16,7 +16,7 @@
+ 
+ using namespace js;
+ 
+-static void* zlib_alloc(void* cx, uInt items, uInt size) {
++static void* zlib_alloc(void* cx, size_t items, size_t size) {
+   return js_calloc(items, size);
+ }
+ 
+@@ -112,8 +112,8 @@ Compressor::Status Compressor::compressMore() {
+   MOZ_ASSERT(zs.avail_in <= left);
+   bool done = zs.avail_in == left;
+ 
+-  Bytef* oldin = zs.next_in;
+-  Bytef* oldout = zs.next_out;
++  Bytef* oldin = (Bytef*)zs.next_in;
++  Bytef* oldout = (Bytef*)zs.next_out;
+   int ret = deflate(&zs, done ? Z_FINISH : (flush ? Z_FULL_FLUSH : Z_NO_FLUSH));
+   outbytes += zs.next_out - oldout;
+   currentChunkSize += zs.next_in - oldin;
