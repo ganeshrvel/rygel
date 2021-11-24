@@ -591,6 +591,9 @@ void HandleFilePublish(InstanceHolder *instance, const http_RequestInfo &request
 
             if (!instance->db->Run("UPDATE fs_settings SET value = ?1 WHERE key = 'FsVersion'", version))
                 return false;
+
+            if (!instance->SyncViews(gp_domain.config.view_directory))
+                return false;
             instance->fs_version = version;
 
             const char *json = Fmt(&io->allocator, "{\"version\": %1}", version).ptr;
