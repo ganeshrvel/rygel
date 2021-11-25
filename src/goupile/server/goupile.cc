@@ -20,6 +20,7 @@
 #include "messages.hh"
 #include "records.hh"
 #include "session.hh"
+#include "vm.hh"
 #include "../../core/libnet/libnet.hh"
 #include "../../core/libsandbox/libsandbox.hh"
 #include "../../../vendor/libsodium/src/libsodium/include/sodium.h"
@@ -1045,6 +1046,9 @@ int Main(int argc, char **argv)
             arguments = MakeSpan((const char **)argv + 2, argc - 2);
         } else if (TestStr(cmd, "unseal")) {
             cmd_func = RunUnseal;
+            arguments = MakeSpan((const char **)argv + 2, argc - 2);
+        } else if (TestStr(cmd, "vm")) {
+            cmd_func = RunVM;
             arguments = MakeSpan((const char **)argv + 2, argc - 2);
         } else if (TestStr(cmd, "serve")) {
             cmd_func = RunServe;
