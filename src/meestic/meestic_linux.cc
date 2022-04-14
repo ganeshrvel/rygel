@@ -342,6 +342,8 @@ static bool RegisterTrayIcon()
     RG_ASSERT(!bus_name[0]);
     Fmt(bus_name, "org.kde.StatusNotifierItem-%1-1", getpid());
 
+    CALL_SDBUS(sd_bus_request_name(bus_user, bus_name, 0), "Failed to acquire tray icon name", false);
+
     static struct {
         const char *category = "ApplicationStatus";
         const char *id = FelixTarget;
@@ -351,6 +353,7 @@ static bool RegisterTrayIcon()
         const char *icon_theme = "";
         const char *icon_name = "meesticgui";
         bool item_is_menu = false;
+        const char *menu = "/ContextMenu";
      } properties;
 
     static const sd_bus_vtable vtable[] = {
@@ -366,6 +369,7 @@ static bool RegisterTrayIcon()
         SD_BUS_PROPERTY("IconPixmap", "a(iiay)", GetComplexProperty, 0, SD_BUS_VTABLE_PROPERTY_CONST),
         SD_BUS_PROPERTY("ToolTip", "(sa(iiay)ss)", GetComplexProperty, 0, SD_BUS_VTABLE_PROPERTY_CONST),
         SD_BUS_PROPERTY("ItemIsMenu", "b", nullptr, RG_OFFSET_OF(decltype(properties), item_is_menu), SD_BUS_VTABLE_PROPERTY_CONST),
+        SD_BUS_PROPERTY("Menu", "o", nullptr, RG_OFFSET_OF(decltype(properties), menu), SD_BUS_VTABLE_PROPERTY_CONST),
 
         // SD_BUS_METHOD("ContextMenu", "ii", "", [](sd_bus_message *, void *, sd_bus_error *) { return 1; }, 0),
         SD_BUS_METHOD("Activate", "ii", "", [](sd_bus_message *, void *, sd_bus_error *) {
@@ -383,7 +387,6 @@ static bool RegisterTrayIcon()
                 int delta;
                 const char *orientation;
                 CALL_SDBUS(sd_bus_message_read(m, "is", &delta, &orientation), "Failed to parse arguments", -1);
-
 
                 if (TestStrI(orientation, "vertical")) {
                     delta = std::clamp(delta, -1, 1);
@@ -406,7 +409,6 @@ static bool RegisterTrayIcon()
 
     CALL_SDBUS(sd_bus_add_object_vtable(bus_user, nullptr, "/StatusNotifierItem", "org.kde.StatusNotifierItem", vtable, &properties),
                "Failed to create tray icon object", false);
-    CALL_SDBUS(sd_bus_request_name(bus_user, bus_name, 0), "Failed to acquire tray icon name", false);
     CALL_SDBUS(sd_bus_match_signal(bus_user, nullptr, "org.freedesktop.DBus", nullptr, "org.freedesktop.DBus",
                                    "NameOwnerChanged", HandleMatch, nullptr),
                "Failed to add D-Bus match rule", false);
@@ -414,6 +416,91 @@ static bool RegisterTrayIcon()
     // Ignore failure... maybe the watcher is not ready yet?
     sd_bus_call_method(bus_user, "org.kde.StatusNotifierWatcher", "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
                       "RegisterStatusNotifierItem", nullptr, nullptr, "s", bus_name);
+
+    return true;
+}
+
+static bool RegisterTrayMenu()
+{
+    static struct {
+        unsigned int version = 1;
+        const char *status = "normal";
+        unsigned int layout = 0;
+     } properties;
+
+    static const sd_bus_vtable vtable[] = {
+        SD_BUS_VTABLE_START(0),
+
+        SD_BUS_METHOD("GetLayout", "iias", "u(ia{sv}av)", [](sd_bus_message *m, void *, sd_bus_error *) {
+            sd_bus_message *reply;
+            CALL_SDBUS(sd_bus_message_new_method_return(m, &reply), "Failed to reply", -1);
+            RG_DEFER { sd_bus_message_unref(reply); };
+
+
+        }),
+        SD_BUS_METHOD("GetGroupProperties", "aias", "a(ia{sv}))", [](sd_bus_message *m, void *, sd_bus_error *) {
+            HashSet<int> items;
+            CALL_SDBUS(sd_bus_message_open_container(m, 'a', "i"), "Failed to parse arguments", -1);
+            while (sd_bus_message_at_end(m, 0) > 0) {
+                int item;
+                CALL_SDBUS(sd_bus_message_read_basic(m, 'i', &item), "Failed to parse arguments", -1);
+                item.Append(item);
+            }
+            CALL_SDBUS(sd_bus_message_close_container(m), "Failed to parse arguments", -1);
+
+            HashSet<const char *> properties;
+            CALL_SDBUS(sd_bus_message_open_container(m, 'a', "s"), "Failed to parse arguments", -1);
+            while (sd_bus_message_at_end(m, 0) > 0) {
+                const char *property;
+                CALL_SDBUS(sd_bus_message_read_basic(m, 's', &property), "Failed to parse arguments", -1);
+                properties.Append(property);
+            }
+            CALL_SDBUS(sd_bus_message_close_container(m), "Failed to parse arguments", -1);
+
+            sd_bus_message *reply;
+            CALL_SDBUS(sd_bus_message_new_method_return(m, &reply), "Failed to reply", -1);
+            RG_DEFER { sd_bus_message_unref(reply); };
+
+            if (!DumpMenuItem(reply))
+                return -1;
+            if (!DumpMenuItem(reply))
+                return -1;
+            if (!DumpMenuItem(reply))
+                return -1;
+            if (!DumpMenuItem(reply))
+                return -1;
+            if (!DumpMenuItem(reply))
+                return -1;
+            if (!DumpMenuItem(reply))
+                return -1;
+
+            return 1;
+        }),
+        /*SD_BUS_METHOD("GetProperty", "is", "v", [](sd_bus_message *m, void *, sd_bus_error *) {
+        }),*/
+        SD_BUS_METHOD("Event", "isvu", "", [](sd_bus_message *m, void *, sd_bus_error *) {
+            int item;
+            const char *type;
+            CALL_SDBUS(sd_bus_message_read(m, "is", &item, &type), "Failed to parse arguments", -1);
+
+            LogInfo("%1 = %2", item, type);
+        }),
+        SD_BUS_METHOD("AboutToShow", "i", "b", [](sd_bus_message *m, void *, sd_bus_error *) {
+            CALL_SDBUS(sd_bus_reply_method_return(m, "b", false), "Failed to reply", -1);
+        }),
+
+        SD_BUS_PROPERTY("Version", "u", nullptr, RG_OFFSET_OF(decltype(properties), version), 0),
+        SD_BUS_PROPERTY("Status", "s", nullptr, RG_OFFSET_OF(decltype(properties), status), 0),
+
+        SD_BUS_SIGNAL("ItemsPropertiesUpdated", "a(ia{sv})a(ias)", 0),
+        SD_BUS_SIGNAL("LayoutUpdated", "ui", 0),
+        SD_BUS_SIGNAL("ItemActivationRequested", "iu", 0),
+
+        SD_BUS_VTABLE_END
+    };
+
+    CALL_SDBUS(sd_bus_add_object_vtable(bus_user, nullptr, "/ContextMenu", "org.canonical.dbusmenu", vtable, &properties),
+               "Failed to create tray icon menu", false);
 
     return true;
 }
@@ -545,6 +632,8 @@ Options:
 
     // Register the tray icon
     if (!RegisterTrayIcon())
+        return 1;
+    if (!RegisterTrayMenu())
         return 1;
 
     // Check that it works once, at least
