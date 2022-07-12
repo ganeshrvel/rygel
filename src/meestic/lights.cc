@@ -73,6 +73,8 @@ bool CheckLightSettings(const LightSettings &settings)
 
 hs_port *OpenLightDevice()
 {
+    return (hs_port *)16;
+
     hs_match_spec specs[] = {
         HS_MATCH_TYPE_VID_PID(HS_DEVICE_TYPE_HID, 0x1462, 0x1563, nullptr),
         HS_MATCH_TYPE_VID_PID(HS_DEVICE_TYPE_HID, 0x1462, 0x1564, nullptr)
@@ -97,6 +99,8 @@ hs_port *OpenLightDevice()
 
 void CloseLightDevice(hs_port *port)
 {
+    return;
+
     hs_port_close(port);
 }
 
@@ -127,6 +131,9 @@ bool ApplyLight(hs_port *port, const LightSettings &settings)
     if (GetDebugFlag("DUMP")) {
         DumpPacket(MakeSpan((const uint8_t *)&pkt, RG_SIZE(pkt)));
     }
+
+    return true;
+
     if (hs_hid_send_feature_report(port, (const uint8_t *)&pkt, RG_SIZE(pkt)) < 0)
         return false;
 
