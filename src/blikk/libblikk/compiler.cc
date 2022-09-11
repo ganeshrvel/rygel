@@ -2933,8 +2933,7 @@ const bk_TypeInfo *bk_Parser::ParseType()
 
 void bk_Parser::FoldInstruction(Size count, const bk_TypeInfo *out_type)
 {
-    if (out_type->size > 1)
-        return;
+    RG_ASSERT(count > 0);
 
     Size addr = IR.len - 2;
 
@@ -2945,14 +2944,24 @@ void bk_Parser::FoldInstruction(Size count, const bk_TypeInfo *out_type)
                 code == bk_Opcode::SkipIfFalse) {
             // Go on
         } else if (code == bk_Opcode::Push) {
-            if (!--remain)
-                break;
+            remain--;
+        } else if (code == bk_Opcode::Reserve) {
+            if (IR[addr].u2.i > remain)
+                return;
+
+            if (remain < 0)
+                return;
+        } else if (code == bk_Opcode::Fetch) {
+            if (IR[addr].u1.i > remain)
+                return;
+
+            remain -= IR[addr].u1.i;
         } else {
             return;
         }
 
-        if (RG_UNLIKELY(addr <= 1))
-            return;
+        if (!remain)
+            break;
     }
 
     Emit(bk_Opcode::End, out_type->size);
@@ -2972,6 +2981,13 @@ void bk_Parser::FoldInstruction(Size count, const bk_TypeInfo *out_type)
             bk_PrimitiveKind primitive = out_type->primitive;
 
             Emit(bk_Opcode::Push, {.primitive = primitive}, value);
+        } else if (out_type->size) {
+            Size ptr = program->ro.len;
+
+            Span<const bk_PrimitiveValue> values = folder.stack.Take(folder.stack.len - out_type->size, out_type->size);
+            program->ro.Append(values);
+
+            Emit(bk_Opcode::Fetch, {.i = (int32_t)values.len}, ptr);
         }
     } else {
         IR.len--;
