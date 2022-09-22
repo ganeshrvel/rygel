@@ -16,6 +16,9 @@
 #include "disk.hh"
 #include "repository.hh"
 #include "vendor/blake3/c/blake3.h"
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 namespace RG {
 
@@ -67,32 +70,58 @@ bool kt_BackupFile(kt_Disk *disk, const char *src_filename, kt_ID *out_id, Size 
     Span<const uint8_t> salt = disk->GetSalt();
     RG_ASSERT(salt.len == BLAKE3_KEY_LEN); // 32 bytes
 
-    blake3_hasher file_hasher;
-    blake3_hasher_init_keyed(&file_hasher, salt.ptr);
+    // Open file
+    int fd = OpenDescriptor(src_filename, (int)OpenFlag::Read);
+    if (fd < 0)
+        return false;
+    RG_DEFER { close(fd); };
+
+    // Map file in memory
+    Span<const uint8_t> file;
+    {
+        struct stat sb;
+        if (fstat(fd, &sb) < 0) {
+            LogError("Failed to stat file '%1': %2", src_filename, strerror(errno));
+            return false;
+        }
+
+        file.ptr = (const uint8_t *)mmap(nullptr, sb.st_size, PROT_READ, MAP_PRIVATE, fd, 0);
+        file.len = (Size)sb.st_size;
+
+        if (!file.ptr) {
+            LogError("Failed to mmap file '%1': %2", src_filename, strerror(errno));
+            return false;
+        }
+    }
+    RG_DEFER { munmap((void *)file.ptr, file.len); };
 
     // Split the file
+    kt_ID file_id = {};
     HeapArray<uint8_t> summary;
-    Size written = 0;
+    std::atomic<Size> written = 0;
     {
-        StreamReader st(src_filename);
-
+        Span<const uint8_t> remain = file;
         kt_Chunker chunker(ChunkAverage, ChunkMin, ChunkMax);
-        HeapArray<uint8_t> buf;
 
-        buf.Grow(Mebibytes(4));
+        summary.Reserve((file.len / ChunkMin + 1) * RG_SIZE(kt_ID));
 
-        do {
-            Size processed = 0;
+        Async async;
 
-            do {
-                buf.Grow(Mebibytes(2));
+        async.Run([&]() {
+            blake3_hasher hasher;
+            blake3_hasher_init_keyed(&hasher, salt.ptr);
+            blake3_hasher_update(&hasher, file.ptr, (size_t)file.len);
+            blake3_hasher_finalize(&hasher, file_id.hash, RG_SIZE(file_id.hash));
 
-                Size read = st.Read(buf.TakeAvailable());
-                if (read < 0)
-                    return false;
-                buf.len += read;
+            return true;
+        });
 
-                processed = chunker.Process(buf, st.IsEOF(), [&](Size idx, Size total, Span<const uint8_t> chunk) {
+        while (remain.len) {
+            Size processed = chunker.Process(remain, true, [&](Size idx, Size total, Span<const uint8_t> chunk) {
+                RG_ASSERT(idx * 32 == summary.len);
+                summary.len += 32;
+
+                async.Run([=, &written]() {
                     kt_ID id = {};
                     {
                         blake3_hasher hasher;
@@ -106,32 +135,34 @@ bool kt_BackupFile(kt_Disk *disk, const char *src_filename, kt_ID *out_id, Size 
                         return false;
                     written += ret;
 
-                    summary.Append(MakeSpan((const uint8_t *)&id, RG_SIZE(id)));
-                    blake3_hasher_update(&file_hasher, chunk.ptr, (size_t)chunk.len);
+                    memcpy(summary.ptr + idx * RG_SIZE(id), &id, RG_SIZE(id));
 
                     return true;
                 });
-                if (processed < 0)
-                    return false;
-            } while (!processed);
 
-            memmove_safe(buf.ptr, buf.ptr + processed, buf.len - processed);
-            buf.len -= processed;
-        } while (!st.IsEOF());
+                return true;
+            });
+
+            // The callback never fails
+            RG_ASSERT(processed >= 0);
+
+            remain.ptr += processed;
+            remain.len -= processed;
+        }
+
+        if (!async.Sync())
+            return false;
     }
 
     // Write list of chunks
-    kt_ID id = {};
     {
-        blake3_hasher_finalize(&file_hasher, id.hash, RG_SIZE(id.hash));
-
-        Size ret = disk->Write(id, summary);
+        Size ret = disk->Write(file_id, summary);
         if (ret < 0)
             return false;
         written += ret;
     }
 
-    *out_id = id;
+    *out_id = file_id;
     if (out_written) {
         *out_written = written;
     }
