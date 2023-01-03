@@ -25,6 +25,11 @@
 
 namespace RG {
 
+struct RecordFragment {
+    char eid[27];
+    Span<const char> data;
+};
+
 static bool PrepareRecordSelect(InstanceHolder *instance, int64_t userid, const SessionStamp &stamp,
                                 const char *tid, int64_t anchor, sq_Statement *out_stmt)
 {
@@ -32,8 +37,8 @@ static bool PrepareRecordSelect(InstanceHolder *instance, int64_t userid, const 
         LocalArray<char, 2048> sql;
 
         sql.len += Fmt(sql.TakeAvailable(), R"(SELECT t.rowid AS t, t.tid, t.deleted,
-                                                      e.rowid AS e, e.eid, e.ctime, e.mtime, e.store, e.sequence,
-                                                      IIF(?1 IS NOT NULL, e.data, NULL) AS data
+                                                      e.rowid AS e, e.eid, e.anchor, e.ctime, e.mtime,
+                                                      e.store, e.sequence, IIF(?1 IS NOT NULL, e.data, NULL) AS data
                                                FROM rec_threads t
                                                INNER JOIN rec_entries e ON (e.tid = t.tid)
                                                WHERE 1+1)").len;
@@ -71,7 +76,8 @@ static bool PrepareRecordSelect(InstanceHolder *instance, int64_t userid, const 
                                           ORDER BY anchor
                                       )
                                       SELECT t.rowid AS t, t.tid, t.deleted,
-                                             e.rowid AS e, e.eid, e.ctime, rec.mtime, e.store, e.sequence, rec.data
+                                             e.rowid AS e, e.eid, rec.anchor, e.ctime, rec.mtime,
+                                             e.store, e.sequence, rec.data
                                           FROM rec
                                           INNER JOIN rec_entries e ON (e.eid = rec.eid)
                                           INNER JOIN rec_threads t ON (t.tid = e.tid)
@@ -148,7 +154,7 @@ void HandleRecordList(InstanceHolder *instance, const http_RequestInfo &request,
             json.Key("entries"); json.StartObject();
             do {
                 int64_t e = sqlite3_column_int64(stmt, 3);
-                const char *store = (const char *)sqlite3_column_text(stmt, 7);
+                const char *store = (const char *)sqlite3_column_text(stmt, 8);
 
                 // This can happen when the recursive CTE is used for historical data
                 if (e == prev_e)
@@ -157,9 +163,9 @@ void HandleRecordList(InstanceHolder *instance, const http_RequestInfo &request,
 
                 json.Key(store); json.StartObject();
                     json.Key("eid"); json.String((const char *)sqlite3_column_text(stmt, 4));
-                    json.Key("ctime"); json.Int64(sqlite3_column_int64(stmt, 5));
-                    json.Key("mtime"); json.Int64(sqlite3_column_int64(stmt, 6));
-                    json.Key("sequence"); json.Int64(sqlite3_column_int64(stmt, 8));
+                    json.Key("ctime"); json.Int64(sqlite3_column_int64(stmt, 6));
+                    json.Key("mtime"); json.Int64(sqlite3_column_int64(stmt, 7));
+                    json.Key("sequence"); json.Int64(sqlite3_column_int64(stmt, 9));
                 json.EndObject();
             } while (stmt.Step() && sqlite3_column_int64(stmt, 0) == t);
             json.EndObject();
@@ -253,7 +259,7 @@ void HandleRecordGet(InstanceHolder *instance, const http_RequestInfo &request, 
         json.Key("entries"); json.StartObject();
         do {
             int64_t e = sqlite3_column_int64(stmt, 3);
-            const char *store = (const char *)sqlite3_column_text(stmt, 7);
+            const char *store = (const char *)sqlite3_column_text(stmt, 8);
 
             // This can happen with the recursive CTE is used for historical data
             if (e == prev_e)
@@ -263,10 +269,10 @@ void HandleRecordGet(InstanceHolder *instance, const http_RequestInfo &request, 
             json.Key(store); json.StartObject();
 
             json.Key("eid"); json.String((const char *)sqlite3_column_text(stmt, 4));
-            json.Key("ctime"); json.Int64(sqlite3_column_int64(stmt, 5));
-            json.Key("mtime"); json.Int64(sqlite3_column_int64(stmt, 6));
-            json.Key("sequence"); json.Int64(sqlite3_column_int64(stmt, 8));
-            json.Key("data"); json.Raw((const char *)sqlite3_column_text(stmt, 9));
+            json.Key("ctime"); json.Int64(sqlite3_column_int64(stmt, 6));
+            json.Key("mtime"); json.Int64(sqlite3_column_int64(stmt, 7));
+            json.Key("sequence"); json.Int64(sqlite3_column_int64(stmt, 9));
+            json.Key("data"); json.Raw((const char *)sqlite3_column_text(stmt, 10));
 
             json.EndObject();
         } while (stmt.Step());
@@ -351,9 +357,155 @@ void HandleRecordAudit(InstanceHolder *instance, const http_RequestInfo &request
     json.Finish();
 }
 
+static bool CheckULID(Span<const char> str)
+{
+    const auto test_char = [](char c) { return IsAsciiDigit(c) || (c >= 'A' && c <= 'Z'); };
+
+    if (str.len != 26 || !std::all_of(str.begin(), str.end(), test_char)) {
+        LogError("Malformed ULID value '%1'", str);
+        return false;
+    }
+
+    return true;
+}
+
 void HandleRecordSave(InstanceHolder *instance, const http_RequestInfo &request, http_IO *io)
 {
-    RG_UNREACHABLE();
+    if (instance->config.sync_mode == SyncMode::Offline) {
+        LogError("Records API is disabled in Offline mode");
+        io->AttachError(403);
+        return;
+    }
+
+    RetainPtr<const SessionInfo> session = GetNormalSession(instance, request, io);
+    const SessionStamp *stamp = session ? session->GetStamp(instance) : nullptr;
+
+    if (!session) {
+        LogError("User is not logged in");
+        io->AttachError(401);
+        return;
+    }
+    if (!stamp || (!stamp->HasPermission(UserPermission::DataNew) &&
+                   !stamp->HasPermission(UserPermission::DataEdit) &&
+                   !stamp->HasPermission(UserPermission::DataDelete))) {
+        LogError("User is not allowed to save data");
+        io->AttachError(403);
+        return;
+    }
+
+    io->RunAsync([=]() {
+        char tid[27];
+        int64_t base = -1;
+        HeapArray<RecordFragment> fragments;
+        {
+            StreamReader st;
+            if (!io->OpenForRead(Kibibytes(1), &st))
+                return;
+            json_Parser parser(&st, &io->allocator);
+
+            parser.ParseObject();
+            while (parser.InObject()) {
+                Span<const char> key = {};
+                parser.ParseKey(&key);
+
+                if (key == "tid") {
+                    Span<const char> str = nullptr;
+
+                    if (parser.ParseString(&str)) {
+                        if (!CheckULID(str)) {
+                            CopyString(str, tid);
+                        } else {
+                            io->AttachError(422);
+                            return;
+                        }
+                    }
+                } else if (key == "anchor") {
+                    parser.SkipNull() || parser.ParseInt(&base);
+                    base = std::max(base, (int64_t)-1);
+                } else if (key == "fragments") {
+                    parser.ParseArray();
+                    while (parser.InArray()) {
+                        parser.Skip();
+                    }
+                } else if (parser.IsValid()) {
+                    LogError("Unexpected key '%1'", key);
+                    io->AttachError(422);
+                    return;
+                }
+            }
+            if (!parser.IsValid()) {
+                io->AttachError(422);
+                return;
+            }
+        }
+
+        // Check missing or invalid values
+        {
+            bool valid = true;
+
+            if (!tid[0]) {
+                LogError("Missing or empty 'tid' value");
+                valid = false;
+            }
+
+            if (!valid) {
+                io->AttachError(422);
+                return;
+            }
+        }
+
+        instance->db->Transaction([&]() {
+            // Get existing record
+            int64_t anchor;
+            {
+                sq_Statement stmt;
+                if (!PrepareRecordSelect(instance, session->userid, *stamp, tid, -1, &stmt))
+                    return false;
+
+                if (stmt.Step()) {
+                    anchor = sqlite3_column_int64(stmt, 7);
+                } else if (stmt.IsValid()) {
+                    anchor = -1;
+                } else {
+                    return false;
+                }
+            }
+
+            // Check permissions
+            if (base != anchor) {
+                LogError("Thread version mismatch");
+                io->AttachError(409);
+                return false;
+            }
+            if (anchor < 0) {
+                if (!stamp->HasPermission(UserPermission::DataNew)) {
+                    LogError("You are not allowed to create new records");
+                    io->AttachError(403);
+                    return false;
+                }
+            } else {
+                if (!stamp->HasPermission(UserPermission::DataEdit)) {
+                    LogError("You are not allowed to edit records");
+                    io->AttachError(403);
+                    return false;
+                }
+            }
+
+            // Write new data fragments
+            {
+                int64_t previous = base;
+
+                for (const RecordFragment &frag: fragments) {
+                    
+                    if (!instance->db->Run(R"(INSERT INTO rec_fragments (previous, tid, eid, userid, username, mtime, fs, data)
+                                              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8))"))
+                        return false;
+                }
+            }
+
+            return true;
+        });
+    });
 }
 
 void HandleRecordExport(InstanceHolder *instance, const http_RequestInfo &request, http_IO *io)
